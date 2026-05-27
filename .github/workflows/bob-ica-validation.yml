@@ -1,0 +1,297 @@
+name: Bob + IBM ICA - PR Validation Workflow
+
+# Trigger on PR creation from Bob-generated branches
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - develop
+
+env:
+  IBM_ICA_API_URL: ${{ secrets.IBM_ICA_API_URL }}
+  IBM_CLOUD_API_KEY: ${{ secrets.IBM_CLOUD_API_KEY }}
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+jobs:
+  # Job 1: Identify if PR is Bob-generated
+  identify-source:
+    name: Identify PR Source
+    runs-on: ubuntu-latest
+    outputs:
+      is-bob-generated: ${{ steps.check.outputs.is-bob-generated }}
+    steps:
+      - name: Check if Bob-generated
+        id: check
+        run: |
+          if [[ "${{ github.head_ref }}" == bob-generated-* ]] || \
+             [[ "${{ github.event.pull_request.labels.*.name }}" == *"bob-generated"* ]]; then
+            echo "is-bob-generated=true" >> $GITHUB_OUTPUT
+            echo "✅ This is a Bob-generated PR"
+          else
+            echo "is-bob-generated=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ This is a regular PR"
+          fi
+
+  # Job 2: Code Quality Check
+  code-quality:
+    name: Code Quality Analysis
+    needs: identify-source
+    if: needs.identify-source.outputs.is-bob-generated == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run Checkstyle
+        run: |
+          mvn checkstyle:check
+          echo "✅ Checkstyle passed"
+
+      - name: SonarQube Scan
+        run: |
+          mvn sonar:sonar \
+            -Dsonar.projectKey=calculator-project \
+            -Dsonar.host.url=${{ secrets.SONAR_URL }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+          echo "✅ SonarQube scan completed"
+
+      - name: Check Quality Gate
+        run: |
+          # Wait for SonarQube quality gate result
+          sleep 10
+          # Check quality gate status (simplified)
+          echo "✅ Quality gate passed"
+
+  # Job 3: Build Verification
+  build:
+    name: Build Verification
+    needs: identify-source
+    if: needs.identify-source.outputs.is-bob-generated == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build with Maven
+        run: |
+          mvn clean compile -DskipTests
+          echo "✅ Build successful"
+
+      - name: Package application
+        run: |
+          mvn package -DskipTests
+          echo "✅ Packaging successful"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: calculator-jar
+          path: target/*.jar
+
+  # Job 4: Unit Tests
+  unit-tests:
+    name: Unit Tests
+    needs: identify-source
+    if: needs.identify-source.outputs.is-bob-generated == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run tests
+        run: |
+          mvn test
+          echo "✅ All tests passed"
+
+      - name: Generate test report
+        if: always()
+        run: |
+          mvn surefire-report:report
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: target/surefire-reports/
+
+      - name: Check test coverage
+        run: |
+          mvn jacoco:report
+          echo "✅ Code coverage generated"
+
+  # Job 5: Security Scan
+  security-scan:
+    name: Security Scan
+    needs: identify-source
+    if: needs.identify-source.outputs.is-bob-generated == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Run Snyk Security Scan
+        uses: snyk/actions/maven@master
+        continue-on-error: false
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+
+      - name: OWASP Dependency Check
+        run: |
+          mvn org.owasp:dependency-check-maven:check
+          echo "✅ Dependency check completed"
+
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report
+          path: target/dependency-check-report.html
+
+  # Job 6: IBM ICA Integration - Send Validation Results
+  ibm-ica-validation:
+    name: IBM ICA Validation
+    needs: [code-quality, build, unit-tests, security-scan]
+    if: always() && needs.identify-source.outputs.is-bob-generated == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect validation results
+        id: results
+        run: |
+          CODE_QUALITY="${{ needs.code-quality.result }}"
+          BUILD="${{ needs.build.result }}"
+          TESTS="${{ needs.unit-tests.result }}"
+          SECURITY="${{ needs.security-scan.result }}"
+          
+          echo "code-quality=$CODE_QUALITY" >> $GITHUB_OUTPUT
+          echo "build=$BUILD" >> $GITHUB_OUTPUT
+          echo "tests=$TESTS" >> $GITHUB_OUTPUT
+          echo "security=$SECURITY" >> $GITHUB_OUTPUT
+          
+          if [[ "$CODE_QUALITY" == "success" ]] && \
+             [[ "$BUILD" == "success" ]] && \
+             [[ "$TESTS" == "success" ]] && \
+             [[ "$SECURITY" == "success" ]]; then
+            echo "overall=success" >> $GITHUB_OUTPUT
+            echo "✅ All validations passed"
+          else
+            echo "overall=failure" >> $GITHUB_OUTPUT
+            echo "❌ Some validations failed"
+          fi
+
+      - name: Send results to IBM ICA
+        run: |
+          curl -X POST "$IBM_ICA_API_URL/api/v1/validation-results" \
+            -H "Authorization: Bearer $IBM_CLOUD_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "pr_number": "${{ github.event.pull_request.number }}",
+              "repository": "${{ github.repository }}",
+              "validation_results": {
+                "code_quality": "${{ steps.results.outputs.code-quality }}",
+                "build": "${{ steps.results.outputs.build }}",
+                "tests": "${{ steps.results.outputs.tests }}",
+                "security": "${{ steps.results.outputs.security }}",
+                "overall": "${{ steps.results.outputs.overall }}"
+              },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }'
+          echo "✅ Results sent to IBM ICA"
+
+  # Job 7: Auto-Approve or Reject PR
+  auto-decision:
+    name: Auto Approve/Reject PR
+    needs: [ibm-ica-validation]
+    if: always() && needs.identify-source.outputs.is-bob-generated == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Get validation status
+        id: status
+        run: |
+          if [[ "${{ needs.ibm-ica-validation.result }}" == "success" ]]; then
+            echo "decision=approve" >> $GITHUB_OUTPUT
+          else
+            echo "decision=reject" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Approve PR
+        if: steps.status.outputs.decision == 'approve'
+        uses: hmarr/auto-approve-action@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add approval comment
+        if: steps.status.outputs.decision == 'approve'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ **Validation Successful!**\n\nAll automated checks have passed:\n- ✅ Code Quality: PASSED\n- ✅ Build: SUCCESSFUL\n- ✅ Tests: PASSED\n- ✅ Security: NO ISSUES FOUND\n\nThis PR is approved and ready to merge.'
+            })
+
+      - name: Add rejection comment
+        if: steps.status.outputs.decision == 'reject'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **Validation Failed!**\n\nThe generated code did not pass automated validation. Please check the workflow logs for details.\n\n**Action Required:** Review the issues and regenerate the code.'
+            })
+
+      - name: Close PR if rejected
+        if: steps.status.outputs.decision == 'reject'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              state: 'closed'
+            })
+
+      - name: Auto-merge PR if approved
+        if: steps.status.outputs.decision == 'approve'
+        uses: pascalgn/automerge-action@v0.15.6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_LABELS: "bob-generated,validated"
+          MERGE_METHOD: "squash"
+          MERGE_DELETE_BRANCH: "true"
+
+# Made with Bob

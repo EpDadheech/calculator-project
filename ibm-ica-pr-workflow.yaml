@@ -1,0 +1,294 @@
+# IBM Cloud Automation (ICA) - PR Workflow Configuration
+# POC: Bob AI Code Generation → Automated PR Creation & Validation
+
+apiVersion: automation.ibm.com/v1
+kind: PRWorkflow
+metadata:
+  name: bob-code-generation-pr-workflow
+  description: Automated PR creation and validation for Bob-generated code
+  version: 1.0.0
+
+# Git Repository Configuration
+repository:
+  provider: github  # or gitlab, bitbucket
+  owner: your-organization
+  name: calculator-project
+  branch:
+    base: main
+    pattern: bob-generated-*  # PR branches created by Bob
+
+# PR Creation Configuration
+prCreation:
+  enabled: true
+  autoCreate: true
+  
+  # PR Template
+  template:
+    title: "[Bob Generated] {feature_description}"
+    body: |
+      ## 🤖 AI-Generated Code by Bob
+      
+      **Generated on:** {timestamp}
+      **Prompt:** {user_prompt}
+      
+      ### Changes Made:
+      {changes_summary}
+      
+      ### Files Modified:
+      {files_list}
+      
+      ---
+      **⚠️ This PR is auto-generated and will be validated by IBM ICA**
+      
+      ### Validation Status:
+      - [ ] Code Quality Check
+      - [ ] Unit Tests
+      - [ ] Security Scan
+      - [ ] Build Verification
+      
+    labels:
+      - bob-generated
+      - automated-pr
+      - needs-validation
+    
+  # Reviewers
+  reviewers:
+    required: 0  # Auto-validation, no human review needed for POC
+    teams:
+      - dev-team
+    
+  # Draft PR initially
+  draft: true
+
+# Validation Pipeline
+validation:
+  enabled: true
+  runOnCreate: true
+  
+  # Validation Steps (Sequential)
+  steps:
+    # Step 1: Code Quality Analysis
+    - name: code-quality-check
+      type: static-analysis
+      tools:
+        - sonarqube
+        - checkstyle
+      config:
+        sonarqube:
+          url: ${SONAR_URL}
+          projectKey: calculator-project
+          qualityGate: default
+        checkstyle:
+          configFile: google_checks.xml
+      thresholds:
+        minCoverage: 70
+        maxBugs: 0
+        maxVulnerabilities: 0
+        maxCodeSmells: 5
+      continueOnError: false
+      
+    # Step 2: Build Verification
+    - name: build-verification
+      type: build
+      commands:
+        - mvn clean compile -DskipTests
+      timeout: 5m
+      continueOnError: false
+      
+    # Step 3: Unit Tests
+    - name: unit-tests
+      type: test
+      commands:
+        - mvn test
+      coverage:
+        enabled: true
+        minThreshold: 70
+      reportPath: target/surefire-reports
+      continueOnError: false
+      
+    # Step 4: Security Scan
+    - name: security-scan
+      type: security
+      tools:
+        - snyk
+        - owasp-dependency-check
+      config:
+        snyk:
+          severity: high
+          failOnIssues: true
+        owasp:
+          failOnCVSS: 7
+      continueOnError: false
+      
+    # Step 5: Integration Tests (Optional)
+    - name: integration-tests
+      type: test
+      commands:
+        - mvn verify -Pintegration-tests
+      continueOnError: true
+      
+    # Step 6: Code Formatting Check
+    - name: format-check
+      type: formatting
+      tools:
+        - google-java-format
+      autoFix: false
+      continueOnError: true
+
+# Auto-Approval Rules
+autoApproval:
+  enabled: true
+  
+  # Conditions for auto-approval
+  conditions:
+    allValidationsPassed: true
+    noSecurityIssues: true
+    buildSuccessful: true
+    testsPassedPercentage: 100
+    codeQualityGatePassed: true
+    
+  # Actions on approval
+  onApprove:
+    - action: update-pr-status
+      status: approved
+      
+    - action: add-label
+      label: validated
+      
+    - action: remove-label
+      label: needs-validation
+      
+    - action: convert-from-draft
+      
+    - action: add-comment
+      message: |
+        ✅ **Validation Successful!**
+        
+        All automated checks have passed:
+        - ✅ Code Quality: PASSED
+        - ✅ Build: SUCCESSFUL
+        - ✅ Tests: {test_pass_count}/{test_total_count} PASSED
+        - ✅ Security: NO ISSUES FOUND
+        
+        This PR is ready to merge.
+        
+    - action: auto-merge
+      method: squash  # or merge, rebase
+      deleteSourceBranch: true
+
+# Auto-Rejection Rules
+autoRejection:
+  enabled: true
+  
+  # Conditions for auto-rejection
+  conditions:
+    - validationFailed: true
+    - securityIssuesFound: true
+    - buildFailed: true
+    - criticalTestsFailed: true
+    - codeQualityGateFailed: true
+    
+  # Actions on rejection
+  onReject:
+    - action: update-pr-status
+      status: changes-requested
+      
+    - action: add-label
+      label: validation-failed
+      
+    - action: add-comment
+      message: |
+        ❌ **Validation Failed!**
+        
+        The generated code did not pass automated validation:
+        
+        {validation_failures}
+        
+        ### Issues Found:
+        {issues_list}
+        
+        ### Recommendations:
+        {recommendations}
+        
+        **Action Required:** Please review the issues and regenerate the code.
+        
+    - action: close-pr
+      reason: validation-failed
+      
+    - action: notify
+      channels:
+        - slack
+        - email
+
+# Notifications
+notifications:
+  enabled: true
+  
+  # On PR Creation
+  onCreate:
+    - type: slack
+      channel: "#code-generation"
+      message: "🤖 Bob generated new code. PR created: {pr_url}"
+      
+  # On Validation Start
+  onValidationStart:
+    - type: slack
+      channel: "#code-generation"
+      message: "🔍 Validating Bob-generated code in PR: {pr_url}"
+      
+  # On Approval
+  onApprove:
+    - type: slack
+      channel: "#code-generation"
+      message: "✅ Bob-generated code validated and merged: {pr_url}"
+    - type: email
+      to: developer@example.com
+      subject: "PR Approved: {pr_title}"
+      
+  # On Rejection
+  onReject:
+    - type: slack
+      channel: "#code-generation"
+      message: "❌ Bob-generated code validation failed: {pr_url}"
+    - type: email
+      to: developer@example.com
+      subject: "PR Rejected: {pr_title}"
+
+# Rollback Configuration
+rollback:
+  enabled: true
+  conditions:
+    - postMergeTestsFailed
+    - productionIssuesDetected
+  action: revert-merge
+
+# Metrics & Reporting
+metrics:
+  enabled: true
+  track:
+    - pr-creation-time
+    - validation-duration
+    - approval-rate
+    - rejection-rate
+    - merge-time
+  dashboard: ibm-ica-dashboard
+
+# Integration with Bob (AI Assistant)
+bobIntegration:
+  enabled: true
+  
+  # API endpoint for Bob to trigger PR creation
+  apiEndpoint: https://ica.ibm.com/api/v1/pr-workflow
+  authentication:
+    type: api-key
+    secretName: bob-api-key
+    
+  # Webhook for validation results back to Bob
+  webhook:
+    url: https://bob-ai.example.com/webhook/validation-result
+    events:
+      - validation-complete
+      - pr-approved
+      - pr-rejected
+
+# Made with Bob
