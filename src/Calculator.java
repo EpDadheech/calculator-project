@@ -16,9 +16,9 @@ public class Calculator extends JFrame implements ActionListener {
     
     // Buttons
     private JButton[] numberButtons = new JButton[10];
-    private JButton[] functionButtons = new JButton[8];
+    private JButton[] functionButtons = new JButton[9];
     private JButton addButton, subButton, mulButton, divButton;
-    private JButton equButton, clrButton, clrEntryButton, decButton;
+    private JButton equButton, clrButton, clrEntryButton, decButton, sqrtButton;
     
     // Panel
     private JPanel panel;
@@ -51,6 +51,7 @@ public class Calculator extends JFrame implements ActionListener {
         clrButton = new JButton("C");
         clrEntryButton = new JButton("CE");
         decButton = new JButton(".");
+        sqrtButton = new JButton("√");
         
         functionButtons[0] = addButton;
         functionButtons[1] = subButton;
@@ -60,9 +61,10 @@ public class Calculator extends JFrame implements ActionListener {
         functionButtons[5] = clrButton;
         functionButtons[6] = clrEntryButton;
         functionButtons[7] = decButton;
+        functionButtons[8] = sqrtButton;
         
         // Style function buttons
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 9; i++) {
             functionButtons[i].addActionListener(this);
             functionButtons[i].setFont(new Font("Arial", Font.BOLD, 24));
             functionButtons[i].setFocusable(false);
@@ -77,6 +79,7 @@ public class Calculator extends JFrame implements ActionListener {
         equButton.setBackground(new Color(100, 200, 255));
         clrButton.setBackground(new Color(255, 100, 100));
         clrEntryButton.setBackground(new Color(255, 150, 150));
+        sqrtButton.setBackground(new Color(150, 255, 150));
         
         // Create number buttons
         for (int i = 0; i < 10; i++) {
@@ -118,9 +121,9 @@ public class Calculator extends JFrame implements ActionListener {
         panel.add(numberButtons[3]);
         panel.add(equButton);
         
-        // Row 5: 0 (spanning 2 columns), ., (empty)
+        // Row 5: 0, √, ., (empty)
         panel.add(numberButtons[0]);
-        panel.add(new JLabel("")); // Empty space
+        panel.add(sqrtButton);
         panel.add(decButton);
         panel.add(new JLabel("")); // Empty space
         
@@ -225,6 +228,23 @@ public class Calculator extends JFrame implements ActionListener {
         // Handle clear entry button (CE) - clears current entry only
         if (e.getSource() == clrEntryButton) {
             display.setText("0");
+            startNewNumber = true;
+        }
+        
+        // Handle square root button
+        if (e.getSource() == sqrtButton) {
+            double value = Double.parseDouble(display.getText());
+            if (value >= 0) {
+                double result = Math.sqrt(value);
+                // Format result to remove unnecessary decimals
+                if (result == (long) result) {
+                    display.setText(String.valueOf((long) result));
+                } else {
+                    display.setText(String.valueOf(result));
+                }
+            } else {
+                display.setText("Error");
+            }
             startNewNumber = true;
         }
     }
