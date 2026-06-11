@@ -1,3 +1,5 @@
+// 🤖 Bob Generated: Test change for IBM ICA integration
+// This is a test to verify the automated PR workflow
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
