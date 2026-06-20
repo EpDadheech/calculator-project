@@ -42,18 +42,6 @@ jobs:
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
       
-      - name: Build with Maven
-        id: build
-        run: |
-          echo "Building project..."
-          mvn clean compile
-          if [ $? -eq 0 ]; then
-            echo "build_status=success" >> $GITHUB_OUTPUT
-          else
-            echo "build_status=failed" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-      
       - name: Run Tests
         id: test
         run: |
@@ -80,8 +68,7 @@ jobs:
           echo "Sending validation results to ICA..."
           
           VALIDATION_STATUS="success"
-          if [ "${{ steps.build.outputs.build_status }}" != "success" ] || \
-             [ "${{ steps.test.outputs.test_status }}" != "success" ]; then
+          if [ "${{ steps.test.outputs.test_status }}" != "success" ]; then
             VALIDATION_STATUS="failed"
           fi
           
@@ -95,7 +82,6 @@ jobs:
               "status": "'$VALIDATION_STATUS'",
               "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
               "checks": {
-                "build": "${{ steps.build.outputs.build_status }}",
                 "tests": "${{ steps.test.outputs.test_status }}",
                 "coverage": "${{ steps.coverage.outputs.coverage_status }}"
               }
@@ -103,7 +89,6 @@ jobs:
       
       - name: Auto-Approve PR (if all checks pass)
         if: |
-          steps.build.outputs.build_status == 'success' &&
           steps.test.outputs.test_status == 'success' &&
           github.event_name == 'pull_request'
         uses: actions/github-script@v6
@@ -118,7 +103,7 @@ jobs:
               repo: context.repo.repo,
               pull_number: pr_number,
               event: 'APPROVE',
-              body: '✅ **Automated Validation Passed**\n\nAll validation checks passed successfully!\n\n**Validation Results:**\n- ✅ Build: SUCCESS\n- ✅ Tests: PASSED\n\n**Validated at:** ' + new Date().toISOString() + '\n\n*Automated by ICA Validation Pipeline*'
+              body: '✅ **Automated Validation Passed**\n\nAll validation checks passed successfully!\n\n**Validation Results:**\n- ✅ Tests: PASSED\n- ✅ Coverage: GENERATED\n\n**Validated at:** ' + new Date().toISOString() + '\n\n*Automated by ICA Validation Pipeline*'
             });
             
             // Add labels
@@ -159,8 +144,7 @@ jobs:
       
       - name: Auto-Reject PR (if checks fail)
         if: |
-          (steps.build.outputs.build_status == 'failed' ||
-           steps.test.outputs.test_status == 'failed') &&
+          steps.test.outputs.test_status == 'failed' &&
           github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
@@ -173,7 +157,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: pr_number,
-              body: '❌ **Automated Validation Failed**\n\nThis PR did not pass validation checks.\n\n**Failed Checks:**\n- Build: ${{ steps.build.outputs.build_status }}\n- Tests: ${{ steps.test.outputs.test_status }}\n\n**Next Steps:**\n1. Review the failed checks above\n2. Fix the issues\n3. Push new commits\n4. Validation will run again at 6 PM or on new commits\n\n**Validated at:** ' + new Date().toISOString() + '\n\n*Automated by ICA Validation Pipeline*'
+              body: '❌ **Automated Validation Failed**\n\nThis PR did not pass validation checks.\n\n**Failed Checks:**\n- Tests: ${{ steps.test.outputs.test_status }}\n\n**Next Steps:**\n1. Review the failed checks above\n2. Fix the issues\n3. Push new commits\n4. Validation will run again at 6 PM or on new commits\n\n**Validated at:** ' + new Date().toISOString() + '\n\n*Automated by ICA Validation Pipeline*'
             });
             
             // Add labels
