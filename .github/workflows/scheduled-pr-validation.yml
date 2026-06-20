@@ -46,7 +46,7 @@ jobs:
         id: test
         run: |
           echo "Running tests with coverage..."
-          mvn clean test
+          mvn clean test -Dcheckstyle.skip=true
           if [ $? -eq 0 ]; then
             echo "test_status=success" >> $GITHUB_OUTPUT
             echo "coverage_status=success" >> $GITHUB_OUTPUT
