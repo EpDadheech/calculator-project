@@ -8,6 +8,7 @@ public class Employee {
     
     private String empId;
     private String empName;
+    private double salary;
     
     /**
      * Default constructor
