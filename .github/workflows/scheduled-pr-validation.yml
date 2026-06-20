@@ -42,24 +42,19 @@ jobs:
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
       
-      - name: Run Tests
+      - name: Run Tests and Generate Coverage
         id: test
         run: |
-          echo "Running tests..."
-          mvn test
+          echo "Running tests with coverage..."
+          mvn clean test
           if [ $? -eq 0 ]; then
             echo "test_status=success" >> $GITHUB_OUTPUT
+            echo "coverage_status=success" >> $GITHUB_OUTPUT
           else
             echo "test_status=failed" >> $GITHUB_OUTPUT
+            echo "coverage_status=failed" >> $GITHUB_OUTPUT
             exit 1
           fi
-      
-      - name: Generate Coverage Report
-        id: coverage
-        run: |
-          echo "Generating coverage report..."
-          mvn jacoco:report
-          echo "coverage_status=success" >> $GITHUB_OUTPUT
       
       - name: Send Results to ICA
         id: send-to-ica
@@ -83,7 +78,7 @@ jobs:
               "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
               "checks": {
                 "tests": "${{ steps.test.outputs.test_status }}",
-                "coverage": "${{ steps.coverage.outputs.coverage_status }}"
+                "coverage": "${{ steps.test.outputs.coverage_status }}"
               }
             }' || echo "ICA notification failed (continuing)"
       
