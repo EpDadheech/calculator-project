@@ -1,0 +1,181 @@
+name: Scheduled PR Validation (6 PM Daily)
+
+on:
+  # Run every day at 6 PM IST (12:30 PM UTC)
+  schedule:
+    - cron: '30 12 * * *'  # 6:00 PM IST = 12:30 PM UTC
+  
+  # Also allow manual trigger
+  workflow_dispatch:
+  
+  # Trigger on PR events for immediate validation
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, develop]
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'schedule' || 
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && 
+       (contains(github.event.pull_request.labels.*.name, 'bob-generated') ||
+        contains(github.event.pull_request.title, '[Bob Generated]')))
+    
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      
+      - name: Set up JDK 11
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+      
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+      
+      - name: Run Tests
+        id: test
+        run: |
+          echo "Running tests..."
+          mvn test
+          if [ $? -eq 0 ]; then
+            echo "test_status=success" >> $GITHUB_OUTPUT
+          else
+            echo "test_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+      
+      - name: Generate Coverage Report
+        id: coverage
+        run: |
+          echo "Generating coverage report..."
+          mvn jacoco:report
+          echo "coverage_status=success" >> $GITHUB_OUTPUT
+      
+      - name: Send Results to ICA
+        id: send-to-ica
+        if: always()
+        run: |
+          echo "Sending validation results to ICA..."
+          
+          VALIDATION_STATUS="success"
+          if [ "${{ steps.test.outputs.test_status }}" != "success" ]; then
+            VALIDATION_STATUS="failed"
+          fi
+          
+          curl -X POST "${{ secrets.ICA_API_URL }}/validation-results" \
+            -H "Authorization: Bearer ${{ secrets.IBM_ICA_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "workspace_id": "${{ secrets.ICA_WORKSPACE_ID }}",
+              "pr_number": "${{ github.event.pull_request.number }}",
+              "repository": "${{ github.repository }}",
+              "status": "'$VALIDATION_STATUS'",
+              "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+              "checks": {
+                "tests": "${{ steps.test.outputs.test_status }}",
+                "coverage": "${{ steps.coverage.outputs.coverage_status }}"
+              }
+            }' || echo "ICA notification failed (continuing)"
+      
+      - name: Auto-Approve PR (if all checks pass)
+        if: |
+          steps.test.outputs.test_status == 'success' &&
+          github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr_number = context.payload.pull_request.number;
+            
+            // Add approval
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr_number,
+              event: 'APPROVE',
+              body: '✅ **Automated Validation Passed**\n\nAll validation checks passed successfully!\n\n**Validation Results:**\n- ✅ Tests: PASSED\n- ✅ Coverage: GENERATED\n\n**Validated at:** ' + new Date().toISOString() + '\n\n*Automated by ICA Validation Pipeline*'
+            });
+            
+            // Add labels
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr_number,
+              labels: ['validated', 'auto-approved']
+            });
+            
+            // Remove needs-validation label
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr_number,
+                name: 'needs-validation'
+              });
+            } catch (error) {
+              console.log('Label needs-validation not found');
+            }
+            
+            // Merge PR
+            try {
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr_number,
+                merge_method: 'squash',
+                commit_title: `${context.payload.pull_request.title}`,
+                commit_message: 'Validated and auto-merged by ICA pipeline'
+              });
+              console.log('PR approved and merged successfully!');
+            } catch (error) {
+              console.log('Auto-merge failed:', error.message);
+              console.log('PR approved but requires manual merge');
+            }
+      
+      - name: Auto-Reject PR (if checks fail)
+        if: |
+          steps.test.outputs.test_status == 'failed' &&
+          github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr_number = context.payload.pull_request.number;
+            
+            // Add rejection comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr_number,
+              body: '❌ **Automated Validation Failed**\n\nThis PR did not pass validation checks.\n\n**Failed Checks:**\n- Tests: ${{ steps.test.outputs.test_status }}\n\n**Next Steps:**\n1. Review the failed checks above\n2. Fix the issues\n3. Push new commits\n4. Validation will run again at 6 PM or on new commits\n\n**Validated at:** ' + new Date().toISOString() + '\n\n*Automated by ICA Validation Pipeline*'
+            });
+            
+            // Add labels
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr_number,
+              labels: ['validation-failed', 'needs-fix']
+            });
+            
+            // Close PR
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr_number,
+              state: 'closed'
+            });
+            
+            console.log('PR rejected and closed due to validation failures');
+
+# Made with Bob
